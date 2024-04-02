@@ -1,0 +1,251 @@
+library(tidyverse)
+library(nflverse)
+library(gt)
+library(gtExtras)
+
+# Data-----
+
+if (!dir.exists("./images")) dir.create("./images")
+options(scipen=999)
+
+# Variables
+num_years <- 10
+
+end_year <- 2024
+start_year <- end_year - num_years
+
+# Data import, tidying, and wrangling-----
+
+draft_charts_raw <- nflreadr::csv_from_url("https://github.com/nflverse/nfldata/raw/master/data/draft_values.csv")
+
+# Stuart and Johnson trade charts end at pick 224. All other charts end at 262.
+# I am halving the pick value of 224, and using that value for all 0 (zero) 
+# values on Stuart and Johnson charts. 
+draft_charts <- draft_charts_raw |> 
+  mutate(stuart = case_when(
+    stuart == 0.0 ~ 0.05, 
+    TRUE ~ stuart
+  )) |> 
+  mutate(johnson = case_when(
+    johnson == 0 ~ 1, 
+    TRUE ~ johnson
+  )) |> 
+  select(pick, johnson, hill, stuart, otc, pff)
+
+# Using this from Arjun Menon because it has more data than Lee Sharpe's 
+# `nflreadr::load_trades()` function does. 
+trades_raw <- nflreadr::csv_from_url("https://github.com/arjunmenon10/NFL-Graphs/raw/main/draftpickstrades.csv") |> 
+  filter(season %in% start_year:end_year) |> 
+  mutate(gave = clean_team_abbrs(gave)) |> 
+  mutate(received = clean_team_abbrs(received))
+
+# Get picks where we have all of the data, no NA's in the season or values.
+# This also filters out trades for players. I want only pick for pick trades.
+pick_trades <- trades_raw |> 
+  summarize(pick_count = sum(!is.na(pick_season)), 
+            total_count = n(), 
+            .by = trade_id) |> 
+  filter(pick_count == total_count)
+
+pick_list <- unique(pick_trades$trade_id)
+
+# Filter the raw trades data by our pick list, and create some helper columns
+# Filter to trades where the trade down team received a single future pick
+# and the trade up team received no future picks. 
+# This is to make the math easier by only having to calculate the discount 
+# on a single pick. 
+
+future_trades <- trades_raw |> 
+  filter(trade_id %in% pick_list) |> 
+  arrange(trade_id, pick_season, pick_number) |> 
+  mutate(type = if_else(received == first(received), "trade_up", "trade_down"), 
+         .after = received, 
+         .by = trade_id) |> 
+  mutate(trade_up_team = if_else(received == first(received), received, gave), 
+         .after = received, 
+         .by = trade_id) |> 
+  mutate(trade_down_team = if_else(received == first(received), gave, received), 
+         .after = received, 
+         .by = trade_id) |> 
+  mutate(year_min = min(pick_season), .by = trade_id) |> 
+  mutate(year_max = max(pick_season), .by = trade_id) |> 
+  mutate(year_diff = year_max - year_min, .by = trade_id) |> 
+  mutate(future_year_1_trade_up = case_when(
+    type == "trade_up" ~ pick_season - year_min, 
+    TRUE ~ 0)) |> 
+  mutate(trade_up_total = sum(future_year_1_trade_up, na.rm = TRUE), 
+         .by = trade_id) |> 
+  mutate(future_year_1_trade_down = case_when(
+    type == "trade_down" ~ pick_season - year_min, 
+    TRUE ~ 0)) |> 
+  mutate(trade_down_total = sum(future_year_1_trade_down, na.rm = TRUE), 
+         .by = trade_id) |> 
+  filter(trade_up_total == 0, trade_down_total == 1) |> 
+  left_join(draft_charts, by = c("pick_number" = "pick"))
+
+# All trades for future year picks by best pick round-----
+
+# Summarize all trades by total points for each trade chart (normalized)
+pick_discount <- 0.8 
+
+next_year <- future_trades |> 
+  arrange(trade_id, -pick_season) |> 
+  mutate(future_round = first(pick_round), .by = trade_id) |> 
+  mutate(future_pick = first(pick_number), .by = trade_id) |> 
+  mutate(future_value = first(johnson), .by = trade_id) |> 
+  mutate(johnson_1 = case_when(
+    pick_season > year_min ~ (johnson * 0.6), 
+    TRUE ~ johnson)) |> 
+  mutate(johnson_2 = case_when(
+    pick_season > year_min ~ (johnson * 0.55), 
+    TRUE ~ johnson)) |> 
+  mutate(johnson_3 = case_when(
+    pick_season > year_min ~ (johnson * 0.50), 
+    TRUE ~ johnson)) |> 
+  mutate(johnson_4 = case_when(
+    pick_season > year_min ~ (johnson * 0.45), 
+    TRUE ~ johnson)) |> 
+  mutate(johnson_5 = case_when(
+    pick_season > year_min ~ (johnson * 0.4), 
+    TRUE ~ johnson)) |> 
+  arrange(trade_id, future_round, future_pick) |> 
+  summarize(picks = n(), 
+            gave = first(gave),
+            received = first(received), 
+            trade_up_team = first(trade_up_team), 
+            trade_down_team = first(trade_down_team), 
+            future_round = first(future_round), 
+            future_pick = first(future_pick), 
+            future_value = first(future_value), 
+            johnson = sum(johnson, na.rm = TRUE),
+            johnson_1 = sum(johnson_1, na.rm = TRUE), 
+            johnson_2 = sum(johnson_2, na.rm = TRUE), 
+            johnson_3 = sum(johnson_3, na.rm = TRUE),
+            johnson_4 = sum(johnson_4, na.rm = TRUE),
+            johnson_5 = sum(johnson_5, na.rm = TRUE),
+            .by = c(trade_id, type))
+
+next_round <- next_year |> 
+  summarize(trades = length(unique(trade_id)), 
+            johnson_total = 
+              sum(johnson[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson[type == "trade_up"], na.rm = TRUE), 
+            johnson_1 = 
+              sum(johnson_1[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_1[type == "trade_up"], na.rm = TRUE), 
+            johnson_2 = 
+              sum(johnson_2[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_2[type == "trade_up"], na.rm = TRUE),
+            johnson_3 = 
+              sum(johnson_3[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_3[type == "trade_up"], na.rm = TRUE), 
+            johnson_4 = 
+              sum(johnson_4[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_4[type == "trade_up"], na.rm = TRUE), 
+            johnson_5 = 
+              sum(johnson_5[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_5[type == "trade_up"], na.rm = TRUE), 
+            future_pick = mean(future_pick, na.rm = TRUE), 
+            future_value = mean(future_value, na.rm = TRUE), 
+            .by = future_round) |> 
+  arrange(future_round) |> 
+  mutate(future_round = as.character(future_round))
+
+max_val_next <- max(
+  c(max(next_round$johnson_1),
+    max(next_round$johnson_2),
+    max(next_round$johnson_3),
+    max(next_round$johnson_4),
+    max(next_round$johnson_5)
+  ))
+
+min_val_next <- min(
+  c(min(next_round$johnson_1),
+    min(next_round$johnson_2),
+    min(next_round$johnson_3),
+    min(next_round$johnson_4),
+    min(next_round$johnson_5)
+  ))
+
+# All trades for same year picks by best pick round
+next_total <- next_year |> 
+  summarize(trades = length(unique(trade_id)), 
+            johnson_total = 
+              sum(johnson[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson[type == "trade_up"], na.rm = TRUE), 
+            johnson_1 = 
+              sum(johnson_1[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_1[type == "trade_up"], na.rm = TRUE), 
+            johnson_2 = 
+              sum(johnson_2[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_2[type == "trade_up"], na.rm = TRUE),
+            johnson_3 = 
+              sum(johnson_3[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_3[type == "trade_up"], na.rm = TRUE), 
+            johnson_4 = 
+              sum(johnson_4[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_4[type == "trade_up"], na.rm = TRUE), 
+            johnson_5 = 
+              sum(johnson_5[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_5[type == "trade_up"], na.rm = TRUE), 
+            future_pick = mean(future_pick, na.rm = TRUE), 
+            future_value = mean(future_value, na.rm = TRUE) 
+            ) |> 
+  mutate(future_round = "Total")
+
+
+next_table <- bind_rows(next_round, next_total) |> 
+  select(future_round, future_pick, future_value, trades, starts_with("johnson_"))
+
+# Table
+
+(
+  tab <- 
+    gt(next_table) |>  
+    gt_theme_538() |> 
+    #gt_nfl_logos("team_abbr") |>  
+    cols_label(johnson_total = "jj_0%", 
+               johnson_1 = "jj_40%", 
+               johnson_2 = "jj_45%", 
+               johnson_3 = "jj_50%", 
+               johnson_4 = "jj_55%", 
+               johnson_5 = "jj_60%", 
+               future_round = html('future<br>round'), 
+               future_pick = html('future<br>pick'), 
+               future_value = html('future<br>value'), 
+    ) |> 
+    # Header text and format
+    tab_header(title = paste0("Future Draft Pick Discounts"), 
+               subtitle = html(paste0("Trades with one pick in future year. Jimmy Johnson Trade Chart", 
+                                      start_year, 
+                                      ":", 
+                                      end_year)
+               )) |> 
+    tab_style(
+      style = list(
+        cell_text(weight = "bold", 
+                  align = "center")
+      ),
+      locations = cells_title(groups = c("title", "subtitle"))
+    ) |> 
+    tab_spanner(columns = c(johnson_1:johnson_5),
+                label = "Value for Trade Down Team") |> 
+    gt_hulk_col_numeric(columns = c(johnson_1:johnson_5), 
+                        domain = c(min_val_next, max_val_next)
+    ) |> 
+    tab_style(
+      style = list(
+        cell_text(weight = "bold"), 
+        cell_borders(sides = "top", weight = px(2), style = "double")
+      ), 
+      locations = cells_body(columns = everything(), 
+                             rows = future_round == "Total")
+    ) |> 
+    fmt_percent(columns = starts_with("johnson"), decimals = 0) |> 
+    fmt_number(columns = starts_with("future_"), decimals = 0)
+)
+
+gtsave(tab, 
+       path = "./images", 
+       filename = paste0("Future Trade Charts by Round.png"), 
+       expand = 10)
