@@ -68,7 +68,7 @@ trades <- trades_raw |>
 
 # All trades for same year picks by best pick round-----
 
-# Summarize all trades by total points for each trade chart (normalized)
+# Summarize all trades by total points for each trade chart by trade up/down
 same_year <- trades |> 
   filter(year_diff == 0) |> 
   mutate(best_pick_number = min(pick_number, na.rm = TRUE), .by = trade_id) |> 
@@ -82,6 +82,11 @@ same_year <- trades |>
             pff_total = sum(pff, na.rm = TRUE), 
             .by = c(trade_id, type))
 
+
+# Summarize all trades based on excess value of trade down - trade up values
+# Use a percentage, so divide trade down values (assumed to be the higher values) 
+# by the trade up values. The chart with values closest to 100% is the chart 
+# that would be the baseline chart, as it shows both teams get equal value.
 same_round <- same_year |> 
   summarize(trades = length(unique(trade_id)), 
             stuart_total = 
@@ -103,6 +108,8 @@ same_round <- same_year |>
   arrange(best_round) |> 
   mutate(best_round = as.character(best_round))
 
+# Get min and max values from the total columns so you can use the same scale 
+# for all the columns in the table. 
 max_val <- max(
   c(max(same_round$stuart_total),
     max(same_round$johnson_total),
@@ -119,7 +126,9 @@ min_val <- min(
     min(same_round$pff_total)
   ))
 
-# All trades for same year picks by best pick round
+# Perform the same calculations as on the `same_round` df, 
+# but calculate it for all trades regardless of round. This gives us a "Total"
+# row we can bind to the `same_round` df. 
 same_total <- same_year |> 
   summarize(trades = length(unique(trade_id)), 
             stuart_total = 
@@ -140,6 +149,7 @@ same_total <- same_year |>
             ) |> 
   mutate(best_round = "Total")
 
+# Bind the total row to the rounds df. 
 same_table <- bind_rows(same_round, same_total)
 
 # Table
