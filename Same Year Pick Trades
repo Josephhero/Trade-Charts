@@ -1,0 +1,190 @@
+library(tidyverse)
+library(nflverse)
+library(gt)
+library(gtExtras)
+
+# Data-----
+
+if (!dir.exists("./images")) dir.create("./images")
+options(scipen=999)
+
+# Variables
+num_years <- 10
+
+end_year <- 2024
+start_year <- end_year - num_years
+
+# Data import, tidying, and wrangling-----
+
+draft_charts_raw <- nflreadr::csv_from_url("https://github.com/nflverse/nfldata/raw/master/data/draft_values.csv")
+
+# Stuart and Johnson trade charts end at pick 224. All other charts end at 262.
+# I am halving the pick value of 224, and using that value for all 0 (zero) 
+# values on Stuart and Johnson charts. 
+draft_charts <- draft_charts_raw |> 
+  mutate(stuart = case_when(
+    stuart == 0.0 ~ 0.05, 
+    TRUE ~ stuart
+  )) |> 
+  mutate(johnson = case_when(
+    johnson == 0 ~ 1, 
+    TRUE ~ johnson
+  )) |> 
+  select(pick, johnson, hill, stuart, otc, pff)
+
+# Using this from Arjun Menon because it has more data than Lee Sharpe's 
+# `nflreadr::load_trades()` function does. 
+trades_raw <- nflreadr::csv_from_url("https://github.com/arjunmenon10/NFL-Graphs/raw/main/draftpickstrades.csv") |> 
+  filter(season %in% start_year:end_year) |> 
+  mutate(gave = clean_team_abbrs(gave)) |> 
+  mutate(received = clean_team_abbrs(received))
+
+# Get picks where we have all of the data, no NA's in the season or values.
+# This also filters out trades for players. I want only pick for pick trades.
+pick_trades <- trades_raw |> 
+  summarize(pick_count = sum(!is.na(pick_season)), 
+            total_count = n(), 
+            .by = trade_id) |> 
+  filter(pick_count == total_count)
+
+pick_list <- unique(pick_trades$trade_id)
+
+# Filter the raw trades data by our pick list, and create some helper columns
+trades <- trades_raw |> 
+  filter(trade_id %in% pick_list) |> 
+  arrange(trade_id, pick_season, pick_number) |> 
+  mutate(type = if_else(received == first(received), "trade_up", "trade_down"), 
+         .after = received, 
+         .by = trade_id) |> 
+  mutate(year_min = min(pick_season), .by = trade_id) |> 
+  mutate(year_max = max(pick_season), .by = trade_id) |> 
+  mutate(year_diff = year_max - year_min, .by = trade_id) |> 
+  left_join(draft_charts, by = c("pick_number" = "pick"))
+
+# What chart do teams actually use?-----
+  # Filter for only trades including only current year picks.
+  # Calculate all picks by given up/received by all trade charts, and see which
+  # is closest to even
+
+# All trades for same year picks by best pick round-----
+
+# Summarize all trades by total points for each trade chart (normalized)
+same_year <- trades |> 
+  filter(year_diff == 0) |> 
+  mutate(best_pick_number = min(pick_number, na.rm = TRUE), .by = trade_id) |> 
+  mutate(best_pick_round = min(pick_round, na.rm = TRUE), .by = trade_id) |> 
+  summarize(picks = n(), 
+            best_round = first(best_pick_round), 
+            stuart_total = sum(stuart, na.rm = TRUE), 
+            johnson_total = sum(johnson, na.rm = TRUE), 
+            hill_total = sum(hill, na.rm = TRUE), 
+            otc_total = sum(otc, na.rm = TRUE), 
+            pff_total = sum(pff, na.rm = TRUE), 
+            .by = c(trade_id, type))
+
+same_round <- same_year |> 
+  summarize(trades = length(unique(trade_id)), 
+            stuart_total = 
+              sum(stuart_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(stuart_total[type == "trade_up"], na.rm = TRUE), 
+            johnson_total = 
+              sum(johnson_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_total[type == "trade_up"], na.rm = TRUE), 
+            hill_total = 
+              sum(hill_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(hill_total[type == "trade_up"], na.rm = TRUE), 
+            otc_total = 
+              sum(otc_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(otc_total[type == "trade_up"], na.rm = TRUE),
+            pff_total = 
+              sum(pff_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(pff_total[type == "trade_up"], na.rm = TRUE), 
+            .by = best_round) |> 
+  arrange(best_round) |> 
+  mutate(best_round = as.character(best_round))
+
+max_val <- max(
+  c(max(same_round$stuart_total),
+    max(same_round$johnson_total),
+    max(same_round$hill_total),
+    max(same_round$otc_total),
+    max(same_round$pff_total)
+  ))
+
+min_val <- min(
+  c(min(same_round$stuart_total),
+    min(same_round$johnson_total),
+    min(same_round$hill_total),
+    min(same_round$otc_total),
+    min(same_round$pff_total)
+  ))
+
+# All trades for same year picks by best pick round
+same_total <- same_year |> 
+  summarize(trades = length(unique(trade_id)), 
+            stuart_total = 
+              sum(stuart_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(stuart_total[type == "trade_up"], na.rm = TRUE), 
+            johnson_total = 
+              sum(johnson_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_total[type == "trade_up"], na.rm = TRUE), 
+            hill_total = 
+              sum(hill_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(hill_total[type == "trade_up"], na.rm = TRUE), 
+            otc_total = 
+              sum(otc_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(otc_total[type == "trade_up"], na.rm = TRUE),
+            pff_total = 
+              sum(pff_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(pff_total[type == "trade_up"], na.rm = TRUE)
+            ) |> 
+  mutate(best_round = "Total")
+
+same_table <- bind_rows(same_round, same_total)
+
+# Table
+
+(
+  tab <- 
+    gt(same_table) |>  
+    gt_theme_538() |> 
+    cols_label(stuart_total = "stuart", 
+               johnson_total = "johnson", 
+               hill_total = "hill", 
+               otc_total = "otc", 
+               pff_total = "pff"
+    ) |> 
+    # Header text and format
+    tab_header(title = paste0("What Draft Value Chart do NFL Teams Use?"), 
+               subtitle = html(paste0("Only trades with all picks in same year. ", 
+                                      start_year, 
+                                      ":", 
+                                      end_year)
+               )) |> 
+    tab_style(
+      style = list(
+        cell_text(weight = "bold", 
+                  align = "center")
+      ),
+      locations = cells_title(groups = c("title", "subtitle"))
+    ) |> 
+    tab_spanner(columns = ends_with("_total"),
+                label = "Value for Trade Down Team") |> 
+    gt_hulk_col_numeric(columns = ends_with("_total"), 
+                        domain = c(min_val, max_val)
+    ) |> 
+    tab_style(
+      style = list(
+        cell_text(weight = "bold"), 
+        cell_borders(sides = "top", weight = px(2), style = "double")
+      ), 
+      locations = cells_body(columns = everything(), 
+                             rows = best_round == "Total")
+    ) |> 
+    fmt_percent(columns = ends_with("_total"), decimals = 0)
+)
+
+gtsave(tab, 
+       path = "./images", 
+       filename = paste0("Trade Charts by Round.png"), 
+       expand = 10)
