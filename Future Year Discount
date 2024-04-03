@@ -86,7 +86,7 @@ future_trades <- trades_raw |>
 # All trades for future year picks by best pick round-----
 
 # Summarize all trades by total points for each trade chart (normalized)
-pick_discount <- 0.8 
+pick_discount <- 0.45 
 
 next_year <- future_trades |> 
   arrange(trade_id, -pick_season) |> 
@@ -146,10 +146,12 @@ next_round <- next_year |>
               sum(johnson_5[type == "trade_down"], na.rm = TRUE) / 
               sum(johnson_5[type == "trade_up"], na.rm = TRUE), 
             future_pick = mean(future_pick, na.rm = TRUE), 
-            future_value = mean(future_value, na.rm = TRUE), 
+            current_value = mean(future_value, na.rm = TRUE), 
             .by = future_round) |> 
   arrange(future_round) |> 
-  mutate(future_round = as.character(future_round))
+  mutate(future_round = as.character(future_round)) |> 
+  mutate(future_value = current_value * 0.55)
+  
 
 max_val_next <- max(
   c(max(next_round$johnson_1),
@@ -195,7 +197,7 @@ next_total <- next_year |>
 
 
 next_table <- bind_rows(next_round, next_total) |> 
-  select(future_round, future_pick, future_value, trades, starts_with("johnson_"))
+  select(future_round, trades, starts_with("johnson_"))
 
 # Table
 
@@ -210,13 +212,11 @@ next_table <- bind_rows(next_round, next_total) |>
                johnson_3 = "jj_50%", 
                johnson_4 = "jj_55%", 
                johnson_5 = "jj_60%", 
-               future_round = html('future<br>round'), 
-               future_pick = html('future<br>pick'), 
-               future_value = html('future<br>value'), 
+               future_round = html("best<br>round")
     ) |> 
     # Header text and format
-    tab_header(title = paste0("Future Draft Pick Discounts"), 
-               subtitle = html(paste0("Trades with one pick in future year. Jimmy Johnson Trade Chart", 
+    tab_header(title = paste0("How Much Do Teams Discount Future Picks?"), 
+               subtitle = html(paste0("Only trades with a single future pick<br>Jimmy Johnson trade chart | ", 
                                       start_year, 
                                       ":", 
                                       end_year)
@@ -242,7 +242,19 @@ next_table <- bind_rows(next_round, next_total) |>
                              rows = future_round == "Total")
     ) |> 
     fmt_percent(columns = starts_with("johnson"), decimals = 0) |> 
-    fmt_number(columns = starts_with("future_"), decimals = 0)
+    fmt_number(columns = starts_with("future_"), decimals = 0) |> 
+  tab_source_note(
+    source_note = md(
+      "<div style=\"width: 100%; display: table;\">
+            <div style=\"display: table-row\">
+                <div style=\"width: 40%; display: table-cell;\">
+                  <img src=\"https://github.com/Josephhero/Jefe-Logo/raw/main/Jefe%20Logo%20Skyline.png\" style=\"height:35px;\">
+                </div>
+                <div style=\"display: table-cell;vertical-align: middle;text-align: right\">Data: nflverse.com</div>
+            </div>
+        </div>"
+    )
+  )
 )
 
 gtsave(tab, 
