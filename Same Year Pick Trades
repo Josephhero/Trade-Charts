@@ -191,10 +191,170 @@ same_table <- bind_rows(same_round, same_total)
       locations = cells_body(columns = everything(), 
                              rows = best_round == "Total")
     ) |> 
-    fmt_percent(columns = ends_with("_total"), decimals = 0)
+    fmt_percent(columns = ends_with("_total"), decimals = 0) |> 
+    tab_source_note(
+      source_note = md(
+        "<div style=\"width: 100%; display: table;\">
+            <div style=\"display: table-row\">
+                <div style=\"width: 40%; display: table-cell;\">
+                  <img src=\"https://github.com/Josephhero/Jefe-Logo/raw/main/Jefe%20Logo%20Skyline.png\" style=\"height:35px;\">
+                </div>
+                <div style=\"display: table-cell;vertical-align: middle;text-align: right\">Data: nflverse.com</div>
+            </div>
+        </div>"
+      )
+    )
 )
 
 gtsave(tab, 
        path = "./images", 
        filename = paste0("Trade Charts by Round.png"), 
+       expand = 10)
+
+
+
+# All trades for future year picks by best pick round-----
+
+# Summarize all trades by total points for each trade chart (normalized)
+# Filter to trades where the trade down team received a single future pick
+# and the trade up team received no future picks. 
+# This is to make the math easier by only having to calculate the discount 
+# on a single pick. 
+next_year <- trades |> 
+  filter(trade_up_total == 0, trade_down_total > 0) |> 
+  mutate(best_pick_number = min(pick_number, na.rm = TRUE), .by = trade_id) |> 
+  mutate(best_pick_round = min(pick_round, na.rm = TRUE), .by = trade_id) |> 
+  summarize(picks = n(), 
+            gave = first(gave),
+            received = first(received), 
+            trade_up_team = first(trade_up_team), 
+            trade_down_team = first(trade_down_team), 
+            best_round = first(best_pick_round), 
+            best_pick = first(best_pick_number), 
+            stuart_total = sum(stuart, na.rm = TRUE), 
+            johnson_total = sum(johnson, na.rm = TRUE), 
+            hill_total = sum(hill, na.rm = TRUE), 
+            otc_total = sum(otc, na.rm = TRUE), 
+            pff_total = sum(pff, na.rm = TRUE), 
+            .by = c(trade_id, type))
+
+
+next_round <- next_year |> 
+  summarize(trades = length(unique(trade_id)), 
+            stuart_total = 
+              sum(stuart_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(stuart_total[type == "trade_up"], na.rm = TRUE), 
+            johnson_total = 
+              sum(johnson_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_total[type == "trade_up"], na.rm = TRUE), 
+            hill_total = 
+              sum(hill_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(hill_total[type == "trade_up"], na.rm = TRUE), 
+            otc_total = 
+              sum(otc_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(otc_total[type == "trade_up"], na.rm = TRUE),
+            pff_total = 
+              sum(pff_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(pff_total[type == "trade_up"], na.rm = TRUE), 
+            .by = best_round) |> 
+  arrange(best_round) |> 
+  mutate(best_round = as.character(best_round))
+
+max_val_next <- max(
+  c(max(next_round$stuart_total),
+    max(next_round$johnson_total),
+    max(next_round$hill_total),
+    max(next_round$otc_total),
+    max(next_round$pff_total)
+  ))
+
+min_val_next <- min(
+  c(min(next_round$stuart_total),
+    min(next_round$johnson_total),
+    min(next_round$hill_total),
+    min(next_round$otc_total),
+    min(next_round$pff_total)
+  ))
+
+# All trades for same year picks by best pick round
+next_total <- next_year |> 
+  summarize(trades = length(unique(trade_id)), 
+            stuart_total = 
+              sum(stuart_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(stuart_total[type == "trade_up"], na.rm = TRUE), 
+            johnson_total = 
+              sum(johnson_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(johnson_total[type == "trade_up"], na.rm = TRUE), 
+            hill_total = 
+              sum(hill_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(hill_total[type == "trade_up"], na.rm = TRUE), 
+            otc_total = 
+              sum(otc_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(otc_total[type == "trade_up"], na.rm = TRUE),
+            pff_total = 
+              sum(pff_total[type == "trade_down"], na.rm = TRUE) / 
+              sum(pff_total[type == "trade_up"], na.rm = TRUE)
+  ) |> 
+  mutate(best_round = "Total")
+
+next_table <- bind_rows(next_round, next_total)
+
+# Table
+
+(
+  tab <- 
+    gt(next_table) |>  
+    gt_theme_538() |> 
+    #gt_nfl_logos("team_abbr") |>  
+    cols_label(stuart_total = "stuart", 
+               johnson_total = "johnson", 
+               hill_total = "hill", 
+               otc_total = "otc", 
+               pff_total = "pff"
+    ) |> 
+    # Header text and format
+    tab_header(title = paste0("What Draft Value Chart do NFL Teams Use?"), 
+               subtitle = html(paste0("Only trades with all picks in same year. ", 
+                                      start_year, 
+                                      ":", 
+                                      end_year)
+               )) |> 
+    tab_style(
+      style = list(
+        cell_text(weight = "bold", 
+                  align = "center")
+      ),
+      locations = cells_title(groups = c("title", "subtitle"))
+    ) |> 
+    tab_spanner(columns = ends_with("_total"),
+                label = "Value for Trade Down Team") |> 
+    gt_hulk_col_numeric(columns = ends_with("_total"), 
+                        domain = c(min_val_next, max_val_next)
+    ) |> 
+    tab_style(
+      style = list(
+        cell_text(weight = "bold"), 
+        cell_borders(sides = "top", weight = px(2), style = "double")
+      ), 
+      locations = cells_body(columns = everything(), 
+                             rows = best_round == "Total")
+    ) |> 
+    fmt_percent(columns = ends_with("_total"), decimals = 0) |> 
+  tab_source_note(
+    source_note = md(
+      "<div style=\"width: 100%; display: table;\">
+            <div style=\"display: table-row\">
+                <div style=\"width: 40%; display: table-cell;\">
+                  <img src=\"https://github.com/Josephhero/Jefe-Logo/raw/main/Jefe%20Logo%20Skyline.png\" style=\"height:35px;\">
+                </div>
+                <div style=\"display: table-cell;vertical-align: middle;text-align: right\">Data: nflverse.com</div>
+            </div>
+        </div>"
+    )
+  )
+)
+
+gtsave(tab, 
+       path = "./images", 
+       filename = paste0("Future Trade Charts by Round.png"), 
        expand = 10)
